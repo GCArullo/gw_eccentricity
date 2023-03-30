@@ -58,6 +58,8 @@ def peak_time_via_quadratic_fit(t, func):
     invMat = np.linalg.inv(np.array([[v1.dot(v2) for v1 in xVecs]
                                      for v2 in xVecs]))
 
+    testFuncs = np.array(testFuncs)
+
     yVec = np.array([testFuncs.dot(v1) for v1 in xVecs])
     coefs = np.array([yVec.dot(v1) for v1 in invMat])
     return t[index] - coefs[1]/(2.*coefs[2]), (coefs[0]
