@@ -7,6 +7,7 @@ https://github.com/vijayvarma392/gw_eccentricity/wiki/Adding-new-eccentricity-de
 """
 
 import numpy as np
+import matplotlib.pyplot as plt
 from .utils import peak_time_via_quadratic_fit, check_kwargs_and_set_defaults
 from .utils import amplitude_using_all_modes
 from .utils import time_deriv_4thOrder
@@ -16,8 +17,6 @@ from .utils import get_default_spline_kwargs
 from .utils import debug_message
 from .plot_settings import use_fancy_plotsettings, colorsDict, labelsDict
 from .plot_settings import figWidthsTwoColDict, figHeightsDict
-import matplotlib.pyplot as plt
-import copy
 
 
 class eccDefinition:
@@ -31,34 +30,70 @@ class eccDefinition:
         ---------
         dataDict: dict
             Dictionary containing waveform modes dict, time etc. Should follow
-            the format:
+            the format::
+
             dataDict = {"t": time,
                         "hlm": modeDict,
+                        "amplm": ampDict,
+                        "phaselm": phaseDict,
+                        "omegalm": omegaDict,
                         "t_zeroecc": time,
                         "hlm_zeroecc": modeDict,
-                       },
-            "t" and "hlm" are mandatory. "t_zeroecc" and "hlm_zeroecc"
-            are only required for `ResidualAmplitude` and
-            `ResidualFrequency` methods, but if provided, they are
-            used for additional diagnostic plots, which can be helpful
-            for all methods. Any other keys in dataDict will be
+                        "amplm_zeroecc": ampDict,
+                        "phaselm_zeroecc": phaseDict,
+                        "omegalm_zeroecc": omegaDict,
+                       }
+
+            "t" and one of the following is mandatory:
+
+            1. "hlm" OR
+            2. "amplm" and "phaselm"
+                but not both 1 and 2 at the same time.
+
+            Apart from specifying "hlm" or "amplm" and "phaselm", the user can
+            also provide "omegalm". If the "omegalm" key is not explicitly
+            provided, it is computed from the given "hlm" or "phaselm" using
+            finite difference method.
+
+            The keys with suffix "zeroecc" are only required for
+            `ResidualAmplitude` and `ResidualFrequency` methods, where
+            "t_zeroecc" and one of the following is to be provided:
+
+            1. "hlm_zeroecc" OR
+            2. "amplm_zeroecc" and "phaselm_zeroecc"
+               but not both 1 and 2 at the same time.
+
+            Similar to "omegalm", the user can also provide "omegalm_zeroecc".
+            If it is not provided in `dataDict`, it is computed from the given
+            "hlm_zeroecc" or "phaselm_zeroecc" using finite difference method.
+
+            If zeroecc data are provided for methods other than
+            `ResidualAmplitude` and `ResidualFrequency`, they are used for
+            additional diagnostic plots, which can be helpful for all
+            methods.
+
+            Any keys in `dataDict` other than the recognized ones will be
             ignored, with a warning.
 
             The recognized keys are:
+
             - "t": 1d array of times.
-                - Should be uniformly sampled, with a small enough time step
-                  so that omega22(t) can be accurately computed. We use a
-                  4th-order finite difference scheme. In dimensionless units,
-                  we recommend a time step of dtM = 0.1M to be conservative,
-                  but one may be able to get away with larger time steps like
-                  dtM = 1M. The corresponding time step in seconds would be dtM
-                  * M * lal.MTSUN_SI, where M is the total mass in Solar
-                  masses.
+
+                - Should be uniformly sampled, with a small enough time step so
+                  that omega22(t) can be accurately computed, if necessary. We
+                  use a 4th-order finite difference scheme. In dimensionless
+                  units, we recommend a time step of dtM = 0.1M to be
+                  conservative, but one may be able to get away with larger
+                  time steps like dtM = 1M. The corresponding time step in
+                  seconds would be dtM * M * lal.MTSUN_SI, where M is the total
+                  mass in Solar masses.
                 - We do not require the waveform peak amplitude to occur at any
                   specific time, but tref_in should follow the same convention
                   for peak time as "t".
+
             - "hlm": Dictionary of waveform modes associated with "t".
-                - Should have the format:
+                Should have the format::
+
                     modeDict = {(l1, m1): h_{l1, m1},
                                 (l2, m2): h_{l2, m2},
                                 ...
@@ -67,7 +102,25 @@ class eccDefinition:
                     m) waveform mode. Should contain at least the (2, 2) mode,
                     but more modes can be included, as indicated by the
                     ellipsis '...'  above.
+
+            - "amplm": Dictionary of amplitudes of waveform modes associated
+              with "t". Should have the same format as "hlm", except that the
+              amplitude is real.
+
+            - "phaselm": Dictionary of phases of waveform modes associated
+              with "t". Should have the same format as "hlm", except that the
+              phase is real. The phaselm is related to hlm as hlm = amplm *
+              exp(- i phaselm) ensuring that the phaselm is monotonically
+              increasing for m > 0 modes.
+
+            - "omegalm": Dictionary of the frequencies of the waveform modes
+              associated with "t". Should have the same format as "hlm", except
+              that the omegalm is real. omegalm is related to the phaselm
+              (see above) as omegalm = d/dt phaselm, which means that the
+              omegalm is positive for m > 0 modes.
+
             - "t_zeroecc" and "hlm_zeroecc":
+
                 - Same as above, but for the quasicircular counterpart to the
                   eccentric waveform. The quasicircular counterpart can be
                   obtained by evaluating a waveform model by keeping the rest
@@ -82,6 +135,10 @@ class eccDefinition:
                   peak time does not have to match that of "t".
                 - We require that "hlm_zeroecc" be at least as long as "hlm" so
                   that residual amplitude/frequency can be computed.
+
+            - "amplm_zeroecc", "phaselm_zeroecc" and "omegalm_zeroecc":
+                Same as "amplm", "phaselm" and "omegalm", respectively, but
+                for the quasicircular counterpart to the eccentric waveform.
 
         num_orbits_to_exclude_before_merger:
                 Can be None or a non negative number.  If None, the full
@@ -180,10 +237,32 @@ class eccDefinition:
                 methods. See
                 eccDefinitionUsingFrequencyFits.get_default_kwargs_for_fits_methods
                 for allowed keys.
+
+            set_failures_to_zero : bool, default=False
+                The code normally raises an exception if sufficient number of
+                extrema are not found. This can happen for various reasons
+                including when the eccentricity is too small for some methods
+                (like the Amplitude method) to measure. See e.g. Fig.4 of
+                arxiv.2302.11257. If no extrema are found, we check whether the
+                following two conditions are satisfied.
+
+                1. `set_failures_to_zero` is set to `True`.
+                2. The waveform is at least
+                  (5 + `num_obrits_to_exclude_before_merger`) orbits long. By
+                  default, `num_obrits_to_exclude_before_merger` is set to 2,
+                  meaning that 2 orbits are removed from the waveform before it
+                  is used by the extrema finding routine. Consequently, in the
+                  default configuration, the original waveform in the input
+                  `dataDict` must have a minimum length of 7 orbits.
+
+                If both of these conditions are met, we assume that small
+                eccentricity is the cause, and set the returned eccentricity
+                and mean anomaly to zero.
+                USE THIS WITH CAUTION!
         """
-        # Truncate dataDict if num_orbits_to_exclude_before_merger is not None
-        self.dataDict, self.t_merger, self.amp22_merger, min_width_for_extrema \
-            = self.truncate_dataDict_if_necessary(
+        # Get data necessary for eccentricity measurement
+        self.dataDict, self.t_merger, self.amp22_merger, \
+            min_width_for_extrema = self.process_data_dict(
                 dataDict, num_orbits_to_exclude_before_merger, extra_kwargs)
         self.t = self.dataDict["t"]
         # check if the time steps are equal, the derivative function
@@ -192,12 +271,10 @@ class eccDefinition:
         if not np.allclose(self.t_diff, self.t_diff[0]):
             raise Exception("Input time array must have uniform time steps.\n"
                             f"Time steps are {self.t_diff}")
-        self.hlm = self.dataDict["hlm"]
-        self.h22 = self.hlm[(2, 2)]
-        self.amp22 = np.abs(self.h22)
-        self.phase22 = - np.unwrap(np.angle(self.h22))
-        self.omega22 = time_deriv_4thOrder(self.phase22,
-                                           self.t[1] - self.t[0])
+        # get amplitude, phase and omega of 22 mode
+        self.amp22 = self.dataDict["amplm"][(2, 2)]
+        self.phase22 = self.dataDict["phaselm"][(2, 2)]
+        self.omega22 = self.dataDict["omegalm"][(2, 2)]
         # Sanity check various kwargs and set default values
         self.extra_kwargs = check_kwargs_and_set_defaults(
             extra_kwargs, self.get_default_extra_kwargs(),
@@ -217,6 +294,7 @@ class eccDefinition:
             = self.get_available_omega22_averaging_methods()
         self.debug_level = self.extra_kwargs["debug_level"]
         self.debug_plots = self.extra_kwargs["debug_plots"]
+        self.set_failures_to_zero = self.extra_kwargs["set_failures_to_zero"]
         # check if there are unrecognized keys in the dataDict
         self.recognized_dataDict_keys = self.get_recognized_dataDict_keys()
         for kw in dataDict.keys():
@@ -250,52 +328,248 @@ class eccDefinition:
         # called, these get set in that function.
         self.t_for_omega22_average = None
         self.omega22_average = None
-
-        if "hlm_zeroecc" in self.dataDict:
-            self.compute_res_amp_and_omega22()
+        # compute residual data
+        if "amplm_zeroecc" in self.dataDict and "omegalm_zeroecc" in self.dataDict:
+            self.compute_res_amp22_and_res_omega22()
 
     def get_recognized_dataDict_keys(self):
         """Get the list of recognized keys in dataDict."""
         list_of_keys = [
             "t",                # time array of waveform modes
             "hlm",              # Dict of eccentric waveform modes
+            "amplm",            # Dict of amplitude of eccentric waveform modes
+            "phaselm",          # Dict of phase of eccentric waveform modes
+            "omegalm",          # Dict of omega of eccentric waveform modes
             "t_zeroecc",        # time array of quasicircular waveform
             "hlm_zeroecc",      # Dict of quasicircular waveform modes
+            "amplm_zeroecc",    # Dict of amplitude of quasicircular waveform modes
+            "phaselm_zeroecc",  # Dict of phase of quasicircular waveform modes
+            "omegalm_zeroecc",  # Dict of omega of quasicircular waveform modes
         ]
         return list_of_keys
 
-    def truncate_dataDict_if_necessary(self,
-                                       dataDict,
-                                       num_orbits_to_exclude_before_merger,
-                                       extra_kwargs):
-        """Truncate dataDict if "num_orbits_to_exclude_before_merger" is not None.
+    def get_amp_phase_omega_data(self, dataDict):
+        """
+        Extract the dictionary of amplitude, omega, and phase from `dataDict`.
 
-        parameters:
+        The `dataDict` provided by the user can contain any of the data
+        corresponding to the keys in `get_recognized_dataDict_keys`. To compute
+        eccentricity and mean anomaly, we need amplitude, phase, and
+        omega. This function extracts these data from `dataDict` and creates a
+        new dictionary containing only the amplitude, phase, and omega of the
+        available modes.
+
+        For example, if `dataDict` contains only the complex hlm modes, this
+        function uses the hlm modes to create a new dictionary containing the
+        amplitude, phase, and omega by decomposing the hlm modes.  Afterwards,
+        only these waveform data in the new dataDict will be used for all
+        further computations.
+
+        Parameters
         ----------
-        dataDict:
-            Dictionary containing modes and times.
-        num_orbits_to_exclude_before_merger: Number of orbits to exclude before
-            merger to get the truncated dataDict.
-        extra_kwargs:
-            Extra kwargs passed to the measure eccentricity.
+        dataDict : dict
+            A dictionary containing waveform data.
 
-        returns:
-        --------
-        dataDict:
-            Truncated if num_orbits_to_exclude_before_merger is not None
-            else the unchanged dataDict.
-        t_merger:
+        Returns
+        -------
+        amp_phase_omega_dict : dict
+            A new dictionary containing only the amplitude, phase, and omega
+            dict of available modes.
+        """
+        amp_phase_omega_dict = {}
+        # add amplm and amplm_zeroecc if zeroecc data provided
+        amp_phase_omega_dict.update(self.get_amplm_from_dataDict(dataDict))
+        # add phaselm and phaselm_zeroecc if zeroecc data provided
+        amp_phase_omega_dict.update(self.get_phaselm_from_dataDict(dataDict))
+        # add omegalm
+        if "omegalm" in dataDict:
+            amp_phase_omega_dict.update({"omegalm": dataDict["omegalm"]})
+        else:
+            # compute it from phaselm that is already in amp_phase_omega_dict
+            amp_phase_omega_dict.update(
+                {"omegalm": self.get_omegalm_from_phaselm(
+                    dataDict["t"],
+                    amp_phase_omega_dict["phaselm"])})
+
+        # add omegalm_zeroecc if zeroecc data is provided
+        if "omegalm_zeroecc" in dataDict:
+            amp_phase_omega_dict.update(
+                {"omegalm_zeroecc": dataDict["omegalm_zeroecc"]})
+        # Look for zeroecc phaselm is amp_phase_omega_dict and compute
+        # omegalm_zeroecc from it if phaselm_zeroecc is present
+        elif "phaselm_zeroecc" in amp_phase_omega_dict \
+             and "t_zeroecc" in dataDict:
+            amp_phase_omega_dict.update(
+                {"omegalm_zeroecc": self.get_omegalm_from_phaselm(
+                    dataDict["t_zeroecc"],
+                    amp_phase_omega_dict["phaselm_zeroecc"])})
+        return amp_phase_omega_dict
+
+    def get_amplm_from_dataDict(self, dataDict):
+        """Get amplm dict from dataDict.
+
+        Returns the dictionary of amplitudes of waveform modes.
+        """
+        amplm = {}
+        amplm_zeroecc = {}
+        for suffix, ampDict in zip(["", "_zeroecc"], [amplm, amplm_zeroecc]):
+            if "amplm" + suffix in dataDict:
+                # Add the amplitude dictionary from dataDict to ampDict
+                ampDict.update(dataDict["amplm" + suffix])
+            elif "hlm" + suffix in dataDict:
+                # compute amplitude of each hlm mode and add to ampDict
+                for k in dataDict["hlm" + suffix]:
+                    ampDict.update({k: np.abs(dataDict["hlm" + suffix][k])})
+            elif suffix == "":
+                raise Exception("`dataDict` should contain either 'amplm' or "
+                                " 'hlm' for computing amplitude of the "
+                                "waveform modes.")
+        amplmDict = {"amplm": amplm}
+        if amplm_zeroecc:
+            amplmDict.update({"amplm_zeroecc": amplm_zeroecc})
+        return amplmDict
+
+    def get_phaselm_from_dataDict(self, dataDict):
+        """Get phaselm dict from dataDict.
+
+        When the dataDict contains only the complex hlm modes, the phaselm is
+        obtained using the relation hlm = amplm * exp(-i phaselm).
+        """
+        phaselm = {}
+        phaselm_zeroecc = {}
+        for suffix, phaseDict in zip(["", "_zeroecc"],
+                                     [phaselm, phaselm_zeroecc]):
+            if "phaselm" + suffix in dataDict:
+                # Add the phase dictionary from dataDict to phaseDict
+                phaseDict.update(dataDict["phaselm" + suffix])
+            elif "hlm" + suffix in dataDict:
+                # Compute phase of each mode in hlm and add to phaselm
+                for k in dataDict["hlm" + suffix]:
+                    phaseDict.update(
+                        {k: - np.unwrap(
+                            np.angle(dataDict["hlm" + suffix][k]))})
+            elif suffix == "":
+                raise Exception("`dataDict` should contain either 'phaselm' "
+                                "or 'hlm' for computing phase of the waveform "
+                                "modes.")
+        phaselmDict = {"phaselm": phaselm}
+        if phaselm_zeroecc:
+            phaselmDict.update({"phaselm_zeroecc": phaselm_zeroecc})
+        return phaselmDict
+
+    def get_omegalm_from_phaselm(self, t, phaselm):
+        """Get omegalm dict from phaselm dict.
+
+        omegalm is computed using the relation omegalm = d phaselm/dt.
+        """
+        omegalm = phaselm.copy()
+        for mode in phaselm:
+            omegalm[mode] = time_deriv_4thOrder(phaselm[mode], t[1] - t[0])
+        return omegalm
+
+    def process_data_dict(self,
+                          dataDict,
+                          num_orbits_to_exclude_before_merger,
+                          extra_kwargs):
+        """Get necessary data for eccentricity measurement from `dataDict`.
+
+        To measure the eccentricity, several waveform data are required,
+        including:
+
+        - amplitude: Used to locate the merger time from its global maxima and
+          may also be utilized to find the pericenters/apocenters depending on
+          the method.
+        - phase: Helps estimate the time at a given number of orbits before the
+          merger.
+        - omega: Required to compute the frequency at the
+          pericenters/apocenters, which are essential for building the
+          interpolant through them. It may also be used to find the
+          pericenters/apocenters depending on the method.
+
+        These waveform data are also used for various checks and diagnostic
+        plots.
+
+        The `dataDict` provided by the user may contain any of the data
+        mentioned in `get_recognized_dataDict_keys`. From `dataDict`, the
+        amplitude, phase, and omega data are obtained. If
+        `num_orbits_to_exclude_before_merger` is not None, then these data
+        (corresponding to the eccentric waveform) are truncated before
+        returning.
+
+        In addition to the above data, this function returns a few more
+        variables -- `t_merger`, `amp22_merger`, and `min_width_for_extrema`
+        for future usage. See the details below.
+
+        Parameters
+        ----------
+        dataDict : dict
+            Dictionary containing modes and times.
+        num_orbits_to_exclude_before_merger : int or None
+            Number of orbits to exclude before the merger to get the truncated
+            dataDict. If None, no truncation is performed.
+        extra_kwargs:
+            Extra keyword arguments passed to the measure eccentricity.
+
+        Returns
+        -------
+        newDataDict : dict
+            Dictionary containing the amplitude, phase, and omega of the
+            eccentric waveform modes. Includes the same of the zeroecc waveform
+            modes when present in the input `dataDict`. If
+            `num_orbits_to_exclude_before_merger` is not None, then the
+            eccentric data, i.e., amplitude, phase, and omega of the available
+            modes, are truncated before newDataDict is returned.
+        t_merger : float
             Merger time evaluated as the time of the global maximum of
-            amplitude_using_all_modes. This is computed before the truncation.
-        amp22_merger:
+            `amplitude_using_all_modes`. This is computed before the
+            truncation.
+        amp22_merger : float
             Amplitude of the (2, 2) mode at t_merger. This is computed before
             the truncation.
-        min_width_for_extrema:
-            Minimum width for find_peaks function. This is computed before the
-            truncation.
+        min_width_for_extrema : float
+            Minimum width for the `find_peaks` function. This is computed
+            before the truncation.
         """
-        t = dataDict["t"]
-        phase22 = - np.unwrap(np.angle(dataDict["hlm"][(2, 2)]))
+        # Test that exactly one of either hlm or (amplm and phaselm) is
+        # provided.
+        # Raise exception if hlm is provided and amplm and/or phaselm is also
+        # provided.
+        for suffix in ["", "_zeroecc"]:
+            if ("hlm"+suffix in dataDict) and any(
+                    ["amplm"+suffix in dataDict,
+                     "phaselm"+suffix in dataDict]):
+                raise Exception(
+                    f"`dataDict` {'should' if suffix == '' else 'may'} "
+                    "contain one of the following: \n"
+                    f"1. 'hlm{suffix}' OR \n"
+                    f"2. 'amplm{suffix}' and 'phaselm{suffix}'\n"
+                    "But not both 1. and 2. at the same time.")
+        # Raise exception if hlm is not provided but either amplm and/or
+        # phaselm is also not provided
+        if ("hlm" not in dataDict) and any(["amplm" not in dataDict,
+                                            "phaselm" not in dataDict]):
+            raise Exception((
+                "`dataDict` should contain one of the following: \n"
+                "1. 'hlm' OR \n"
+                "2. 'amplm' and 'phaselm'\n"
+                "But not both 1. and 2. at the same time."))
+        # Create a new dictionary that will contain the data necessary for
+        # eccentricity measurement.
+        newDataDict = {}
+        if "t" in dataDict:
+            newDataDict.update({"t": dataDict["t"]})
+        else:
+            raise Exception("`dataDict` must contain 't', the times associated"
+                            " with the eccentric waveform data.")
+        # add t_zeroecc if present
+        if "t_zeroecc" in dataDict:
+            newDataDict.update({"t_zeroecc": dataDict["t_zeroecc"]})
+        # From the user dataDict get the amplitude, phase, omega data and add
+        # to newDataDict
+        newDataDict.update(self.get_amp_phase_omega_data(dataDict))
+
+        # Now we compute data using newDataDict and then truncate it if
+        # required.
         # We need to know the merger time of eccentric waveform.
         # This is useful, for example, to subtract the quasi circular
         # amplitude from eccentric amplitude in residual amplitude method
@@ -304,14 +578,17 @@ class eccDefinition:
         # and to rescale amp22 by it's value at the merger (in AmplitudeFits)
         # respectively.
         t_merger = peak_time_via_quadratic_fit(
-            t,
-            amplitude_using_all_modes(dataDict["hlm"]))[0]
-        merger_idx = np.argmin(np.abs(t - t_merger))
-        amp22_merger = np.abs(dataDict["hlm"][(2, 2)])[merger_idx]
+            newDataDict["t"],
+            amplitude_using_all_modes(newDataDict["amplm"], "amplm"))[0]
+        merger_idx = np.argmin(np.abs(newDataDict["t"] - t_merger))
+        amp22_merger = newDataDict["amplm"][(2, 2)][merger_idx]
+        phase22 = newDataDict["phaselm"][(2, 2)]
         phase22_merger = phase22[merger_idx]
         # Minimum width for peak finding function
         min_width_for_extrema = self.get_width_for_peak_finder_from_phase22(
-            t, phase22, phase22_merger)
+            newDataDict["t"],
+            phase22,
+            phase22_merger)
         if num_orbits_to_exclude_before_merger is not None:
             # Truncate the last num_orbits_to_exclude_before_merger number of
             # orbits before merger.
@@ -324,16 +601,17 @@ class eccDefinition:
                     " Given value was {num_orbits}")
             index_num_orbits_earlier_than_merger \
                 = self.get_index_at_num_orbits_earlier_than_merger(
-                    phase22, phase22_merger,
+                    phase22,
+                    phase22_merger,
                     num_orbits_to_exclude_before_merger)
-            dataDict = copy.deepcopy(dataDict)
-            for mode in dataDict["hlm"]:
-                dataDict["hlm"][mode] \
-                    = dataDict["hlm"][mode][
+            # Truncate amp, phase, omega in eccentric waveform data.
+            for k in ["amplm", "phaselm", "omegalm"]:
+                for mode in newDataDict[k]:
+                    newDataDict[k][mode] = newDataDict[k][mode][
                         :index_num_orbits_earlier_than_merger]
-            dataDict["t"] \
-                = dataDict["t"][:index_num_orbits_earlier_than_merger]
-        return dataDict, t_merger, amp22_merger, min_width_for_extrema
+                    newDataDict["t"] = newDataDict["t"][
+                        :index_num_orbits_earlier_than_merger]
+        return newDataDict, t_merger, amp22_merger, min_width_for_extrema
 
     def get_width_for_peak_finder_from_phase22(self,
                                                t,
@@ -460,6 +738,7 @@ class eccDefinition:
             "treat_mid_points_between_pericenters_as_apocenters": False,
             "refine_extrema": False,
             "kwargs_for_fits_methods": {},  # Gets overriden in fits methods
+            "set_failures_to_zero": False,
         }
         return default_extra_kwargs
 
@@ -533,10 +812,12 @@ class eccDefinition:
         introduced.
 
         To detect if an extremum has been missed we do the following:
+
         - Compute the phase22 difference between i-th and (i+1)-th extrema:
           delta_phase22_extrema[i] = phase22_extrema[i+1] - phase22_extrema[i]
         - Compute the ratio of delta_phase22: r_delta_phase22_extrema[i] =
           delta_phase22_extrema[i+1]/delta_phase22_extrema[i]
+
         For correctly separated extrema, the ratio r_delta_phase22_extrema
         should be close to 1.
 
@@ -802,21 +1083,93 @@ class eccDefinition:
                 " Can not create an interpolant.")
 
     def check_num_extrema(self, extrema, extrema_type="extrema"):
-        """Check number of extrema."""
+        """Check number of extrema.
+
+        Check the number of extrema to determine if there are enough for
+        building the interpolants through the pericenters and apocenters. In
+        cases where the number of extrema is insufficient, i.e., less than 2,
+        we further verify if the waveform is long enough to have a sufficient
+        number of extrema.
+
+        We verify that the waveform sent to the peak finding routine is a
+        minimum of 5 orbits long. By default,
+        `num_orbits_to_exclude_before_merger` is set to 2, which means that 2
+        orbits are subtracted from the original waveform within the input
+        dataDict. Consequently, in the default configuration, the original
+        waveform must be at least 7 orbits in length to be considered as
+        sufficiently long.
+
+        If it is sufficiently long, but the chosen method fails to detect any
+        extrema, it is possible that the eccentricity is too small. If
+        `set_failures_to_zero` is set to True, then we set
+        `insufficient_extrema_but_long_waveform` to True and return it.
+
+        Parameters
+        ----------
+        extrema : array-like
+            1d array of extrema to determine if the length is sufficient for
+            building interpolants of omega22 values at these extrema. We
+            require the length to be greater than or equal to two.
+        extrema_type: str, default="extrema"
+            String to indicate whether the extrema corresponds to pericenters
+            or the apocenters.
+
+        Returns
+        -------
+        insufficient_extrema_but_long_waveform : bool
+            True if the waveform has more than approximately 5 orbits but the
+            number of extrema is less than two. False otherwise.
+        """
         num_extrema = len(extrema)
         if num_extrema < 2:
-            recommended_methods = ["ResidualAmplitude", "AmplitudeFits"]
-            if self.method not in recommended_methods:
-                method_message = ("It's possible that the eccentricity is too "
-                                  f"low for the {self.method} method to detect"
-                                  f" the {extrema_type}. Try one of "
-                                  f"{recommended_methods}.")
+            # Check if the waveform is sufficiently long by estimating the
+            # approximate number of orbits contained in the waveform data using
+            # the phase of the (2, 2) mode, assuming that a phase change of
+            # 4*pi occurs over one orbit.
+            # NOTE: Since we truncate the waveform data by removing
+            # `num_orbits_to_remove_before_merger` orbits before the merger,
+            # phase22[-1] corresponds to the phase of the (2, 2) mode
+            # `num_orbits_to_remove_before_merger` orbits before the merger.
+            approximate_num_orbits = ((self.phase22[-1] - self.phase22[0])
+                                      / (4 * np.pi))
+            if approximate_num_orbits > 5:
+                # The waveform is sufficiently long but the extrema finding
+                # method fails to find enough number of extrema. This may
+                # happen if the eccentricity is too small and, therefore, the
+                # modulations in the amplitude/frequency is too small for the
+                # method to detect them.
+                insufficient_extrema_but_long_waveform = True
             else:
-                method_message = ""
-            raise Exception(
-                f"Number of {extrema_type} found = {num_extrema}.\n"
-                f"Can not build frequency interpolant through the {extrema_type}.\n"
-                f"{method_message}")
+                insufficient_extrema_but_long_waveform = False
+            if insufficient_extrema_but_long_waveform \
+               and self.set_failures_to_zero:
+                debug_message(
+                    "The waveform has approximately "
+                    f"{approximate_num_orbits:.2f}"
+                    f" orbits but number of {extrema_type} found is "
+                    f"{num_extrema}. Since `set_failures_to_zero` is set to "
+                    f"{self.set_failures_to_zero}, no exception is raised. "
+                    "Instead the eccentricity and mean anomaly will be set to "
+                    "zero.",
+                    important=True,
+                    debug_level=0)
+            else:
+                recommended_methods = ["ResidualAmplitude", "AmplitudeFits"]
+                if self.method not in recommended_methods:
+                    method_message = (
+                        "It's possible that the eccentricity is too small for "
+                        f"the {self.method} method to detect the "
+                        f"{extrema_type}. Try one of {recommended_methods} "
+                        "which should work even for a very small eccentricity."
+                    )
+                else:
+                    method_message = ""
+                raise Exception(
+                    f"Number of {extrema_type} found = {num_extrema}.\n"
+                    "Can not build frequency interpolant through the "
+                    f"{extrema_type}.\n"
+                    f"{method_message}")
+            return insufficient_extrema_but_long_waveform
 
     def check_if_dropped_too_many_extrema(self, original_extrema, new_extrema,
                                           extrema_type="extrema",
@@ -870,10 +1223,10 @@ class eccDefinition:
         the apocenter times, t_apocenters.
 
         Using omega22_pericenters(t) and omega22_apocenters(t), we first
-        compute e_omega22(t), as described in Eq.(4) of arXiv:2302.11257. We
+        compute e_omega22(t), as described in Eq.(4) of `arXiv:2302.11257`_. We
         then use e_omega22(t) to compute the eccentricity egw(t) using Eq.(8)
-        of arXiv:2302.11257. Mean anomaly is defined using t_pericenters, as
-        described in Eq.(10) of arXiv:2302.11257.
+        of `arXiv:2302.11257`_. Mean anomaly is defined using t_pericenters, as
+        described in Eq.(10) of `arXiv:2302.11257`_.
 
         To find t_pericenters/t_apocenters, one can look for extrema in
         different waveform data, like omega22(t) or Amp22(t), the amplitude of
@@ -882,78 +1235,114 @@ class eccDefinition:
         option (described below) lets the user pick which waveform data to use
         to find t_pericenters/t_apocenters.
 
-        parameters:
+        .. _arXiv:2302.11257: https://arxiv.org/abs/2302.11257
+
+        Parameters
         ----------
-        tref_in:
+        tref_in : array or float
             Input reference time at which to measure eccentricity and mean
-            anomaly.  Can be a single float or an array.
+            anomaly.
 
-        fref_in:
+        fref_in : array or float
             Input reference GW frequency at which to measure the eccentricity
-            and mean anomaly. Can be a single float or an array. Only one of
-            tref_in/fref_in should be provided.
+            and mean anomaly. Only one of *tref_in*/*fref_in* should be
+            provided.
 
-            Given an fref_in, we find the corresponding tref_in such that
-            omega22_average(tref_in) = 2 * pi * fref_in. Here,
-            omega22_average(t) is a monotonically increasing average frequency
-            obtained from the instantaneous omega22(t). omega22_average(t)
-            defaults to the orbit averaged omega22, but other options are
-            available (see omega22_averaging_method below).
+            Given an *fref_in*, we find the corresponding tref_in such that::
+
+                omega22_average(tref_in) = 2 * pi * fref_in
+
+            Here, omega22_average(t) is a monotonically increasing average
+            frequency obtained from the instantaneous
+            omega22(t). omega22_average(t) defaults to the orbit averaged
+            omega22, but other options are available (see
+            omega22_averaging_method below).
 
             Eccentricity and mean anomaly measurements are returned on a subset
-            of tref_in/fref_in, called tref_out/fref_out, which are described
-            below.  If dataDict is provided in dimensionless units, tref_in
-            should be in units of M and fref_in should be in units of
-            cycles/M. If dataDict is provided in MKS units, t_ref should be in
-            seconds and fref_in should be in Hz.
+            of *tref_in*/*fref_in*, called *tref_out*/*fref_out*, which are
+            described below.  If *dataDict* is provided in dimensionless units,
+            *tref_in* should be in units of M and *fref_in* should be in units
+            of cycles/M. If dataDict is provided in MKS units, *t_ref* should
+            be in seconds and *fref_in* should be in Hz.
 
-        returns:
-        --------
-        A dictionary containing the following keys
-        tref_out:
-            tref_out is the output reference time at which eccentricity and
-            mean anomaly are measured.
-            tref_out is included in the returned dictionary only when tref_in
-            is provided.
-            Units of tref_out are the same as that of tref_in.
+        Returns
+        -------
+        A dictionary with the following keys
+            tref_out
+                *tref_out* is the output reference time at which eccentricity
+                and mean anomaly are measured.  *tref_out* is included in the
+                returned dictionary only when *tref_in* is provided.  Units of
+                *tref_out* are the same as that of *tref_in*.
 
-            tref_out is set as
-            tref_out = tref_in[tref_in >= tmin & tref_in <= tmax],
-            where tmax = min(t_pericenters[-1], t_apocenters[-1]) and
-                  tmin = max(t_pericenters[0], t_apocenters[0]),
-            As eccentricity measurement relies on the interpolants
-            omega22_pericenters(t) and omega22_apocenters(t), the above cutoffs
-            ensure that we only compute the eccentricity where both
-            omega22_pericenters(t) and omega22_apocenters(t) are within their
-            bounds.
+                tref_out is set as::
 
-        fref_out:
-            fref_out is the output reference frequency at which eccentricity
-            and mean anomaly are measured.
-            fref_out is included in the returned dictionary only when fref_in
-            is provided.
-            Units of fref_out are the same as that of fref_in.
+                    tref_out = tref_in[tref_in >= tmin & tref_in <= tmax],
 
-            fref_out is set as
-            fref_out = fref_in[fref_in >= fref_min && fref_in <= fref_max],
-            where fref_min/fref_max are minimum/maximum allowed reference
-            frequency, with fref_min = omega22_average(tmin_for_fref)/2/pi
-            and fref_max = omega22_average(tmax_for_fref)/2/pi.
-            tmin_for_fref/tmax_for_fref are close to tmin/tmax, see
-            eccDefinition.get_fref_bounds() for details.
+                where, ::
 
-        eccentricity:
-            Measured eccentricity at tref_out/fref_out. Same type as
-            tref_out/fref_out.
+                    tmax = min(t_pericenters[-1], t_apocenters[-1])
+                    tmin = max(t_pericenters[0], t_apocenters[0])
 
-        mean_anomaly:
-            Measured mean anomaly at tref_out/fref_out. Same type as
-            tref_out/fref_out.
+                As eccentricity measurement relies on the interpolants
+                omega22_pericenters(t) and omega22_apocenters(t), the above
+                cutoffs ensure that we only compute the eccentricity where both
+                omega22_pericenters(t) and omega22_apocenters(t) are within
+                their bounds.
+
+            fref_out
+                *fref_out* is the output reference frequency at which
+                eccentricity and mean anomaly are measured.  *fref_out* is
+                included in the returned dictionary only when *fref_in* is
+                provided.  Units of *fref_out* are the same as that of
+                *fref_in*.
+
+                *fref_out* is set as::
+
+                    fref_out = fref_in[fref_in >= fref_min && fref_in <= fref_max]
+
+                where, fref_min/fref_max are minimum/maximum allowed reference
+                frequency, with::
+
+                    fref_min = omega22_average(tmin_for_fref)/2/pi
+                    fref_max = omega22_average(tmax_for_fref)/2/pi
+
+                tmin_for_fref/tmax_for_fref are close to tmin/tmax, see
+                :meth:`eccDefinition.get_fref_bounds()` for details.
+
+            eccentricity
+                Measured eccentricity at *tref_out*/*fref_out*. Same type as
+                *tref_out*/*fref_out*.
+
+            mean_anomaly
+                Measured mean anomaly at *tref_out*/*fref_out*. Same type as
+                *tref_out*/*fref_out*.
         """
+        # check that only one of tref_in or fref_in is provided
+        if (tref_in is not None) + (fref_in is not None) != 1:
+            raise KeyError("Exactly one of tref_in and fref_in"
+                           " should be specified.")
+        elif tref_in is not None:
+            # Identify whether the reference point is in time or frequency
+            self.domain = "time"
+            # Identify whether the reference point is scalar or array-like
+            self.ref_ndim = np.ndim(tref_in)
+            self.tref_in = np.atleast_1d(tref_in)
+        else:
+            self.domain = "frequency"
+            self.ref_ndim = np.ndim(fref_in)
+            self.fref_in = np.atleast_1d(fref_in)
         # Get the pericenters and apocenters
         pericenters = self.find_extrema("pericenters")
         original_pericenters = pericenters.copy()
-        self.check_num_extrema(pericenters, "pericenters")
+        # Check if there are a sufficient number of extrema. In cases where the
+        # waveform is long enough (at least 5 +
+        # `num_orbits_to_exclude_before_merger`, i.e., 7 orbits long with
+        # default settings) but the method fails to detect any extrema, it
+        # might be that the eccentricity is too small for the current method to
+        # detect it. See Fig.4 in arxiv.2302.11257. In such cases, the
+        # following variable will be true.
+        insufficient_pericenters_but_long_waveform \
+            = self.check_num_extrema(pericenters, "pericenters")
         # In some cases it is easier to find the pericenters than finding the
         # apocenters. For such cases, one can only find the pericenters and use
         # the mid points between two consecutive pericenters as the location of
@@ -964,7 +1353,25 @@ class eccDefinition:
         else:
             apocenters = self.find_extrema("apocenters")
         original_apocenters = apocenters.copy()
-        self.check_num_extrema(apocenters, "apocenters")
+        insufficient_apocenters_but_long_waveform \
+            = self.check_num_extrema(apocenters, "apocenters")
+
+        # If the eccentricity is too small for a method to find the extrema,
+        # and `set_failures_to_zero` is true, then we set the eccentricity and
+        # mean anomaly to zero and return them. In this case, the rest of the
+        # code in this function is not executed, and therefore, many variables
+        # that are needed for making diagnostic plots are not computed. Thus,
+        # in such cases, the diagnostic plots may not work.
+        if any([insufficient_pericenters_but_long_waveform,
+                insufficient_apocenters_but_long_waveform]) \
+                and self.set_failures_to_zero:
+            # Store this information that we are setting ecc and mean anomaly
+            # to zero to use it in other places
+            self.setting_ecc_to_zero = True
+            return self.set_eccentricity_and_mean_anomaly_to_zero()
+        else:
+            self.setting_ecc_to_zero = False
+
         # Choose good extrema
         self.pericenters_location, self.apocenters_location \
             = self.get_good_extrema(pericenters, apocenters)
@@ -996,20 +1403,10 @@ class eccDefinition:
         self.t_apocenters = self.t[self.apocenters_location]
         self.tmax = min(self.t_pericenters[-1], self.t_apocenters[-1])
         self.tmin = max(self.t_pericenters[0], self.t_apocenters[0])
-        # check that only one of tref_in or fref_in is provided
-        if (tref_in is not None) + (fref_in is not None) != 1:
-            raise KeyError("Exactly one of tref_in and fref_in"
-                           " should be specified.")
-        elif tref_in is not None:
-            tref_in_ndim = np.ndim(tref_in)
-            self.tref_in = np.atleast_1d(tref_in)
-        else:
-            fref_in_ndim = np.ndim(fref_in)
-            tref_in_ndim = fref_in_ndim
-            fref_in = np.atleast_1d(fref_in)
+        if self.domain == "frequency":
             # get the tref_in and fref_out from fref_in
             self.tref_in, self.fref_out \
-                = self.compute_tref_in_and_fref_out_from_fref_in(fref_in)
+                = self.compute_tref_in_and_fref_out_from_fref_in(self.fref_in)
         # We measure eccentricity and mean anomaly from tmin to tmax.
         self.tref_out = self.tref_in[
             np.logical_and(self.tref_in <= self.tmax,
@@ -1021,7 +1418,7 @@ class eccDefinition:
 
         # Sanity checks
         # check that fref_out and tref_out are of the same length
-        if fref_in is not None:
+        if self.domain == "frequency":
             if len(self.fref_out) != len(self.tref_out):
                 raise Exception(
                     "length of fref_out and tref_out do not match."
@@ -1030,18 +1427,7 @@ class eccDefinition:
 
         # Check if tref_out is reasonable
         if len(self.tref_out) == 0:
-            if self.tref_in[-1] > self.tmax:
-                raise Exception(
-                    f"tref_in {self.tref_in} is later than tmax="
-                    f"{self.tmax}, "
-                    "which corresponds to min(last pericenter "
-                    "time, last apocenter time).")
-            if self.tref_in[0] < self.tmin:
-                raise Exception(
-                    f"tref_in {self.tref_in} is earlier than tmin="
-                    f"{self.tmin}, "
-                    "which corresponds to max(first pericenter "
-                    "time, first apocenter time).")
+            self.check_input_limits(self.tref_in, self.tmin, self.tmax)
             raise Exception(
                 "tref_out is empty. This can happen if the "
                 "waveform has insufficient identifiable "
@@ -1078,38 +1464,86 @@ class eccDefinition:
         # check if eccentricity is monotonic and convex
         self.check_monotonicity_and_convexity()
 
-        # If tref_in is a scalar, return a scalar
-        if tref_in_ndim == 0:
-            self.mean_anomaly = self.mean_anomaly[0]
-            self.eccentricity = self.eccentricity[0]
-            self.tref_out = self.tref_out[0]
-
-        if fref_in is not None and fref_in_ndim == 0:
-            self.fref_out = self.fref_out[0]
-
         if self.debug_plots:
             # make a plot for diagnostics
             fig, axes = self.make_diagnostic_plots()
             self.save_debug_fig(fig, f"gwecc_{self.method}_diagnostics.pdf")
             plt.close(fig)
-        return_dict = {"eccentricity": self.eccentricity,
-                       "mean_anomaly": self.mean_anomaly}
-        if fref_in is not None:
-            return_dict.update({"fref_out": self.fref_out})
+        # return measured eccentricity, mean anomaly and reference time or
+        # frequency where these are measured.
+        return self.make_return_dict_for_eccentricity_and_mean_anomaly()
+
+    def set_eccentricity_and_mean_anomaly_to_zero(self):
+        """Set eccentricity and mean_anomaly to zero."""
+        if self.domain == "time":
+            # This function sets eccentricity and mean anomaly to zero when a
+            # method fails to detect any extrema, and therefore, in such cases,
+            # we can set tref_out to be the same as tref_in.
+            self.tref_out = self.tref_in
+            out_len = len(self.tref_out)
         else:
-            return_dict.update({"tref_out": self.tref_out})
+            # similarly we can set fref_out to be the same as fref_in
+            self.fref_out = self.fref_in
+            out_len = len(self.fref_out)
+        self.eccentricity = np.zeros(out_len)
+        self.mean_anomaly = np.zeros(out_len)
+        return self.make_return_dict_for_eccentricity_and_mean_anomaly()
+
+    def make_return_dict_for_eccentricity_and_mean_anomaly(self):
+        """Prepare a dictionary with reference time/freq, ecc, and mean anomaly.
+
+        In this function, we prepare a dictionary containing the measured
+        eccentricity, mean anomaly, and the reference time or frequency where
+        these are measured.
+
+        We also make sure that if the input reference time/frequency is scalar,
+        then the returned eccentricity and mean anomaly are also scalars. To do
+        this, we use the information about tref_in/fref_in that is provided by
+        the user. At the top of the measure_ecc function, we set ref_ndim to
+        identify whether the original input was scalar or array-like and use
+        that here.
+        """
+        # If the original input was scalar, convert the measured eccentricity,
+        # mean anomaly, etc., to scalar.
+        if self.ref_ndim == 0:
+            # check if ecc, mean ano have more than one elements
+            for var, arr in zip(["eccentricity", "mean_anomaly"],
+                                [self.eccentricity, self.mean_anomaly]):
+                if len(arr) != 1:
+                    raise Exception(f"The reference {self.domain} is scalar "
+                                    f"but measured {var} does not have "
+                                    "exactly one element.")
+            self.eccentricity = self.eccentricity[0]
+            self.mean_anomaly = self.mean_anomaly[0]
+            if self.domain == "time":
+                self.tref_out = self.tref_out[0]
+            else:
+                self.fref_out = self.fref_out[0]
+
+        return_dict = {
+            "eccentricity": self.eccentricity,
+            "mean_anomaly": self.mean_anomaly
+        }
+        # Return either tref_out or fref_out, depending on whether the input
+        # reference point was in time or frequency, respectively.
+        if self.domain == "time":
+            return_dict.update({
+              "tref_out": self.tref_out})
+        else:
+            return_dict.update({
+              "fref_out": self.fref_out})
         return return_dict
 
     def et_from_ew22_0pn(self, ew22):
         """Get temporal eccentricity at Newtonian order.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         ew22:
             eccentricity measured from the 22-mode frequency.
 
-        Returns:
-        --------
+        Returns
+        -------
         et:
             Temporal eccentricity at Newtonian order.
         """
@@ -1126,17 +1560,17 @@ class eccDefinition:
         omega22_apocenters_interpolant at t using Eq.(4) in arXiv:2302.11257
         and then use Eq.(8) in arXiv:2302.11257 to compute e_gw from e_omega22.
 
-        Paramerers:
-        -----------
+        Paramerers
+        ----------
         t:
             Time to compute the eccentricity at. Could be scalar or an array.
 
-        Returns:
-        --------
+        Returns
+        -------
         Eccentricity at t.
         """
         # Check that t is within tmin and tmax to avoid extrapolation
-        self.check_time_limits(t)
+        self.check_input_limits(t, self.tmin, self.tmax)
 
         omega22_pericenter_at_t = self.omega22_pericenters_interp(t)
         omega22_apocenter_at_t = self.omega22_apocenters_interp(t)
@@ -1150,20 +1584,20 @@ class eccDefinition:
     def derivative_of_eccentricity(self, t, n=1):
         """Get time derivative of eccentricity.
 
-        Parameters:
-        -----------
-        t:
+        Parameters
+        ----------
+        t
             Times to get the derivative at.
-        n: int
+        n : int
             Order of derivative. Should be 1 or 2, since it uses
             cubic spine to get the derivatives.
 
-        Returns:
-        --------
+        Returns
+        -------
             nth order time derivative of eccentricity.
         """
         # Check that t is within tmin and tmax to avoid extrapolation
-        self.check_time_limits(t)
+        self.check_input_limits(t, self.tmin, self.tmax)
 
         if self.ecc_for_checks is None:
             self.ecc_for_checks = self.compute_eccentricity(
@@ -1192,17 +1626,17 @@ class eccDefinition:
         Finally, we build a linear interpolant for y using these xVals and
         yVals.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         t:
             Time to compute mean anomaly at. Could be scalar or an array.
 
-        Returns:
-        --------
+        Returns
+        -------
         Mean anomaly at t.
         """
         # Check that t is within tmin and tmax to avoid extrapolation
-        self.check_time_limits(t)
+        self.check_input_limits(t, self.tmin, self.tmax)
 
         # Get the mean anomaly at the pericenters
         mean_ano_pericenters = np.arange(len(self.t_pericenters)) * 2 * np.pi
@@ -1212,21 +1646,57 @@ class eccDefinition:
         # Modulo 2pi to make the mean anomaly vary between 0 and 2pi
         return mean_ano % (2 * np.pi)
 
-    def check_time_limits(self, t):
-        """Check that time t is within tmin and tmax.
+    def check_input_limits(self, input_vals, min_allowed_val, max_allowed_val):
+        """Check that the input time/frequency is within the allowed range.
 
-        To avoid any extrapolation, check that the times t are
-        always greater than or equal to tmin and always less than tmax.
+        To avoid any extrapolation, check that the times or frequencies are
+        always greater than or equal to the minimum allowed value and always
+        less than the maximum allowed value.
+
+        Parameters
+        ----------
+        input_vals: float or array-like
+            Input times or frequencies where eccentricity/mean anomaly is to
+            be measured.
+
+        min_allowed_val: float
+            Minimum allowed time or frequency where eccentricity/mean anomaly
+            can be measured.
+
+        max_allowed_val: float
+            Maximum allowed time or frequency where eccentricity/mean anomaly
+            can be measured.
         """
-        t = np.atleast_1d(t)
-        if any(t > self.tmax):
-            raise Exception(f"Found times later than tmax={self.tmax}, "
-                            "which corresponds to min(last pericenter "
-                            "time, last apocenter time).")
-        if any(t < self.tmin):
-            raise Exception(f"Found times earlier than tmin= {self.tmin}, "
-                            "which corresponds to max(first pericenter "
-                            "time, first apocenter time).")
+        input_vals = np.atleast_1d(input_vals)
+        if any(input_vals > max_allowed_val):
+            message = (f"Found reference {self.domain} later than maximum "
+                       f"allowed {self.domain}={max_allowed_val}")
+            if self.domain == "time":
+                # Add information about the maximum allowed time
+                message += " which corresponds to "
+                if self.setting_ecc_to_zero:
+                    message += ("time at `num_orbits_to_exclude_before_merger`"
+                                " orbits before the merger.")
+                else:
+                    message += "min(last pericenter time, last apocenter time)."
+            raise Exception(
+                f"Reference {self.domain} is outside the allowed "
+                f"range [{min_allowed_val}, {max_allowed_val}]."
+                f"\n{message}")
+        if any(input_vals < min_allowed_val):
+            message = (f"Found reference {self.domain} earlier than minimum "
+                       f"allowed {self.domain}={min_allowed_val}")
+            if self.domain == "time":
+                # Add information about the minimum allowed time
+                message += " which corresponds to "
+                if self.setting_ecc_to_zero:
+                    message += "the starting time in the time array."
+                else:
+                    message += "max(first pericenter time, first apocenter time)."
+            raise Exception(
+                f"Reference {self.domain} is outside the allowed "
+                f"range [{min_allowed_val}, {max_allowed_val}]."
+                f"\n{message}")
 
     def check_extrema_separation(self, extrema_location,
                                  extrema_type="extrema",
@@ -1245,15 +1715,14 @@ class eccDefinition:
         un-suppress the warnings. always_return=True is not sufficient to
         un-suppress the warnings.
 
-        parameters:
-        always_return:
+        Parameters
+        ----------
+        always_return : bool, default: False
             The return values of this function are used by some plotting
             functions, so if always_return=True, we execute the body and
             return values regardless of debug_level. However, the warnings
             will still be suppressed for debug_level < 1.
-            Default is False.
         """
-
         # This function only has checks with the flag important=False, which
         # means that warnings are suppressed when debug_level < 1.
         # We return without running the rest of the body to avoid unnecessary
@@ -1300,10 +1769,11 @@ class eccDefinition:
                                          check_convexity=False):
         """Check if measured eccentricity is a monotonic function of time.
 
-        parameters:
-        check_convexity:
+        Parameters
+        ----------
+        check_convexity : bool, default: False
             In addition to monotonicity, it will check for
-            convexity as well. Default is False.
+            convexity as well.
         """
         if self.decc_dt_for_checks is None:
             self.decc_dt_for_checks = self.derivative_of_eccentricity(
@@ -1413,9 +1883,8 @@ class eccDefinition:
                     "pericenters and apocenters do not appear alternately.",
                     self.debug_level, important=False)
 
-    def compute_res_amp_and_omega22(self):
-        """Compute residual amp22 and omega22."""
-        self.hlm_zeroecc = self.dataDict["hlm_zeroecc"]
+    def compute_res_amp22_and_res_omega22(self):
+        """Compute residual amp22 and residual omega22."""
         self.t_zeroecc = self.dataDict["t_zeroecc"]
         # check that the time steps are equal
         self.t_zeroecc_diff = np.diff(self.t_zeroecc)
@@ -1423,13 +1892,16 @@ class eccDefinition:
             raise Exception(
                 "Input time array t_zeroecc must have uniform time steps\n"
                 f"Time steps are {self.t_zeroecc_diff}")
-        self.h22_zeroecc = self.hlm_zeroecc[(2, 2)]
+        # get amplitude and omega of 22 mode
+        self.amp22_zeroecc = self.dataDict["amplm_zeroecc"][(2, 2)]
+        self.omega22_zeroecc = self.dataDict["omegalm_zeroecc"][(2, 2)]
         # to get the residual amplitude and omega, we need to shift the
         # zeroecc time axis such that the merger of the zeroecc is at the
         # same time as that of the eccentric waveform
+        amp = amplitude_using_all_modes(
+            self.dataDict["amplm_zeroecc"], "amplm")  # total amplitude
         self.t_merger_zeroecc = peak_time_via_quadratic_fit(
-            self.t_zeroecc,
-            amplitude_using_all_modes(self.dataDict["hlm_zeroecc"]))[0]
+            self.t_zeroecc, amp)[0]
         self.t_zeroecc_shifted = (self.t_zeroecc
                                   - self.t_merger_zeroecc
                                   + self.t_merger)
@@ -1456,13 +1928,9 @@ class eccDefinition:
         # extrapolation does not happen before t_merger, which is where
         # eccentricity is normally measured.
         self.amp22_zeroecc_interp = self.interp(
-            self.t, self.t_zeroecc_shifted, np.abs(self.h22_zeroecc),
+            self.t, self.t_zeroecc_shifted, self.amp22_zeroecc,
             allowExtrapolation=True)
         self.res_amp22 = self.amp22 - self.amp22_zeroecc_interp
-
-        self.phase22_zeroecc = - np.unwrap(np.angle(self.h22_zeroecc))
-        self.omega22_zeroecc = time_deriv_4thOrder(
-            self.phase22_zeroecc, self.t_zeroecc[1] - self.t_zeroecc[0])
         self.omega22_zeroecc_interp = self.interp(
             self.t, self.t_zeroecc_shifted, self.omega22_zeroecc,
             allowExtrapolation=True)
@@ -1480,11 +1948,11 @@ class eccDefinition:
         t_average_pericenters and t_average_apocenters, and sort them to obtain
         t_average.
 
-        Returns:
-        --------
-        t_for_orbit_averaged_omega22:
+        Returns
+        -------
+        t_for_orbit_averaged_omega22
             Times associated with orbit averaged omega22
-        sorted_idx_for_orbit_averaged_omega22:
+        sorted_idx_for_orbit_averaged_omega22
             Indices used to sort the times associated with orbit averaged
             omega22
         """
@@ -1508,8 +1976,14 @@ class eccDefinition:
         return [t_for_orbit_averaged_omega22,
                 sorted_idx_for_orbit_averaged_omega22]
 
-    def get_orbit_averaged_omega22_at_pericenters(self):
+    def get_orbit_averaged_omega22_between_pericenters(self):
         """Get orbital average of omega22 between two consecutive pericenters.
+
+        Given N pericenters at times t[i], i=0...N-1, this function returns a
+        np.array of length N-1, where result[i] is the frequency averaged over
+        [t[i], t[i+1]]. result[i] is associated with the time at the temporal
+        midpoint between t[i] and t[i+1], i.e (t[i] + t[i+1])/2. See Eq.(12)
+        and Eq.(13) in arXiv:2302.11257 for details.
 
         Orbital average of omega22 between two consecutive pericenters
         i-th and (i+1)-th is given by
@@ -1522,43 +1996,45 @@ class eccDefinition:
         return (np.diff(self.phase22[self.pericenters_location]) /
                 np.diff(self.t[self.pericenters_location]))
 
-    def get_orbit_averaged_omega22_at_apocenters(self):
+    def get_orbit_averaged_omega22_between_apocenters(self):
         """Get orbital average of omega22 between two consecutive apocenters.
 
-        The procedure to get the orbital average of omega22 at apocenters is
-        the same as that at pericenters. See documentation of
-        `get_orbit_averaged_omega22_at_pericenters` for details.
+        The procedure to get the orbital average of omega22 between apocenters
+        is the same as that between pericenters. See documentation of
+        `get_orbit_averaged_omega22_between_pericenters` for details.
         """
         return (np.diff(self.phase22[self.apocenters_location]) /
                 np.diff(self.t[self.apocenters_location]))
 
-    def compute_orbit_averaged_omega22_at_extrema(self, t):
-        """Compute reference frequency by orbital averaging omega22 at extrema.
+    def compute_orbit_averaged_omega22_between_extrema(self, t):
+        """Compute reference frequency by orbital averaging omega22 between extrema.
 
-        We compute the orbital average of omega22 at the pericenters
-        and the apocenters following:
+        We compute the orbital average of omega22 between two consecutive
+        extrema as following:
         <omega22>_i = (int_t[i]^t[i+1] omega22(t) dt) / (t[i+1] - t[i])
         where t[i] is the time of ith extrema and the suffix `i` stands for the
         i-th orbit between i-th and (i+1)-th extrema
         <omega22>_i is associated with the temporal midpoint between the i-th
         and (i+1)-th extrema,
         <t>_i = (t[i] + t[i+1]) / 2
+        See Eq.(12) and Eq.(13) in arXiv:2302.11257 for more details.
 
-        We do this averaging for pericenters and apocenters using the functions
-        `get_orbit_averaged_omega22_at_pericenters` and
-        `get_orbit_averaged_omega22_at_apocenters` and combine the results.
-        The combined array is then sorted using the sorting indices from
-        `get_t_average_for_orbit_averaged_omega22`.
+        We do this averaging between consecutive pericenters and consecutive
+        apocenters using the functions
+        `get_orbit_averaged_omega22_between_pericenters` and
+        `get_orbit_averaged_omega22_between_apocenters` and combine the
+        results. The combined array is then sorted using the sorting indices
+        from `get_t_average_for_orbit_averaged_omega22`.
 
         Finally we interpolate the data {<t>_i, <omega22>_i} and evaluate the
         interpolant at the input times `t`.
         """
         # get orbit averaged omega22 between consecutive pericenrers
-        # and apoceneters
+        # and consecutive apoceneters
         self.orbit_averaged_omega22_pericenters \
-            = self.get_orbit_averaged_omega22_at_pericenters()
+            = self.get_orbit_averaged_omega22_between_pericenters()
         self.orbit_averaged_omega22_apocenters \
-            = self.get_orbit_averaged_omega22_at_apocenters()
+            = self.get_orbit_averaged_omega22_between_apocenters()
         # check monotonicity of the omega22 average
         self.check_monotonicity_of_omega22_average(
             self.orbit_averaged_omega22_pericenters,
@@ -1566,7 +2042,8 @@ class eccDefinition:
         self.check_monotonicity_of_omega22_average(
             self.orbit_averaged_omega22_apocenters,
             "omega22 averaged [apocenter to apocenter]")
-        # combine the average omega22 at pericenters and apocenters
+        # combine the average omega22 between consecutive pericenters and
+        # consecutive apocenters
         orbit_averaged_omega22 = np.append(
             self.orbit_averaged_omega22_apocenters,
             self.orbit_averaged_omega22_pericenters)
@@ -1595,9 +2072,11 @@ class eccDefinition:
                                               description="omega22 average"):
         """Check that omega average is monotonically increasing.
 
-        omega22_average:
+        Parameters
+        ----------
+        omega22_average : array-like
             1d array of omega22 averages to check for monotonicity.
-        description:
+        description : str
             String to describe what the the which omega22 average we are
             looking at.
         """
@@ -1697,7 +2176,7 @@ class eccDefinition:
         """Return available omega22 averaging methods."""
         available_methods = {
             "mean_of_extrema_interpolants": self.compute_mean_of_extrema_interpolants,
-            "orbit_averaged_omega22": self.compute_orbit_averaged_omega22_at_extrema,
+            "orbit_averaged_omega22": self.compute_orbit_averaged_omega22_between_extrema,
             "omega22_zeroecc": self.compute_omega22_zeroecc
         }
         return available_methods
@@ -1705,9 +2184,9 @@ class eccDefinition:
     def get_omega22_average(self, method=None):
         """Get times and corresponding values of omega22 average.
 
-        Parameters:
-        -----------
-        method: str
+        Parameters
+        ----------
+        method : str
             omega22 averaging method. Must be one of the following:
             - "mean_of_extrema_interpolants"
             - "orbit_averaged_omega22"
@@ -1717,11 +2196,11 @@ class eccDefinition:
             Default is None which uses the method provided in
             `self.extra_kwargs["omega22_averaging_method"]`
 
-        Returns:
-        --------
-        t_for_omega22_average:
+        Returns
+        -------
+        t_for_omega22_average : array-like
             Times associated with omega22_average.
-        omega22_average:
+        omega22_average : array-like
             omega22 average using given "method".
             These are data interpolated on the times t_for_omega22_average,
             where t_for_omega22_average is a subset of tref_in passed to the
@@ -1737,16 +2216,17 @@ class eccDefinition:
             using the gwecc_object with the following variables
 
             - orbit_averaged_omega22_apocenters: orbit averaged omega22 between
-              apocenters This is available when measuring eccentricity at
-              reference frequency.  If it is not available, it can be computed
-              using `get_orbit_averaged_omega22_at_apocenters`
+              apocenters. This is available when measuring eccentricity at
+              reference frequency. If it is not available, it can be computed
+              using `get_orbit_averaged_omega22_between_apocenters`
             - t_average_apocenters: temporal midpoints between
               apocenters. These are associated with
               `orbit_averaged_omega22_apocenters`
             - orbit_averaged_omega22_pericenters: orbit averaged omega22
-              between pericenters This is available when measuring eccentricity
-              at reference frequency.  If it is not available, it can be
-              computed using `get_orbit_averaged_omega22_at_pericenters`
+              between pericenters. This is available when measuring
+              eccentricity at reference frequency. If it is not available, it
+              can be computed using
+              `get_orbit_averaged_omega22_between_pericenters`
             - t_average_pericenters: temporal midpoints between
               pericenters. These are associated with
               `orbit_averaged_omega22_pericenters`
@@ -1756,7 +2236,8 @@ class eccDefinition:
         if method != "orbit_averaged_omega22":
             # the average frequencies are using interpolants that use omega22
             # values between tmin and tmax, therefore the min and max time for
-            # which omega22 average are the same as tmin and tmax, respectively.
+            # which omega22 average are the same as tmin and tmax,
+            # respectively.
             self.tmin_for_fref = self.tmin
             self.tmax_for_fref = self.tmax
         else:
@@ -1800,6 +2281,7 @@ class eccDefinition:
         and set those to tref_in.
 
         omega22_average(t) could be calculated in the following ways
+
         - Mean of the omega22 given by the spline through the pericenters and
           the spline through the apocenters, we call this
           "mean_of_extrema_interpolants"
@@ -1867,18 +2349,18 @@ class eccDefinition:
         used.  To force recomputation of omega22_average, for example, with a
         new method one need to set it to None first.
 
-        Parameters:
-        -----------
-        method:
+        Parameters
+        ----------
+        method : str
             Omega22 averaging method.  See
             get_available_omega22_averaging_methods for available methods.
             Default is None which will use the default method for omega22
             averaging using `extra_kwargs["omega22_averaging_method"]`
 
-        Returns:
+        Returns
+        -------
             Minimum allowed reference frequency, Maximum allowed reference
             frequency.
-        --------
         """
         if self.omega22_average is None:
             self.t_for_omega22_average, self.omega22_average = self.get_omega22_average(method)
@@ -1888,17 +2370,17 @@ class eccDefinition:
     def get_fref_out(self, fref_in, method):
         """Get fref_out from fref_in that falls within the valid average f22 range.
 
-        Parameters:
+        Parameters
         ----------
-        fref_in:
+        fref_in : array-like
             Input 22 mode reference frequency array.
 
-        method:
+        method : str
             method for getting average omega22
 
-        Returns:
+        Returns
         -------
-        fref_out:
+        fref_out : array-like
             Slice of fref_in that satisfies:
             fref_in >= fref_min && fref_in < fref_max
         """
@@ -1907,22 +2389,16 @@ class eccDefinition:
             np.logical_and(fref_in >= fref_min,
                            fref_in < fref_max)]
         if len(fref_out) == 0:
-            if fref_in[0] < fref_min:
-                raise Exception("fref_in is earlier than minimum available "
-                                f"frequency {fref_min}")
-            if fref_in[-1] > fref_max:
-                raise Exception("fref_in is later than maximum available "
-                                f"frequency {fref_max}")
-            else:
-                raise Exception("fref_out is empty. This can happen if the "
-                                "waveform has insufficient identifiable "
-                                "pericenters/apocenters.")
+            self.check_input_limits(fref_in, fref_min, fref_max)
+            raise Exception("fref_out is empty. This can happen if the "
+                            "waveform has insufficient identifiable "
+                            "pericenters/apocenters.")
         return fref_out
 
     def make_diagnostic_plots(
             self,
             add_help_text=True,
-            usetex=True,
+            usetex=False,
             style=None,
             use_fancy_settings=True,
             twocol=False,
@@ -1934,6 +2410,7 @@ class eccDefinition:
         to check an implemented method.
 
         We plot the following quantities
+
         - The eccentricity vs vs time
         - decc/dt vs time, this is to test the monotonicity of eccentricity as
           a function of time
@@ -1954,31 +2431,33 @@ class eccDefinition:
 
         Additionally, we plot the following if data for zero eccentricity is
         provided and method is not residual method
+
         - residual amp22 vs time with the location of pericenters and
           apocenters shown.
         - residual omega22 vs time with the location of pericenters and
           apocenters shown.
+
         If the method itself uses residual data, then add one plot for
+
         - data that is not being used for finding extrema.
-        For example, if method is ResidualAmplitude
-        then plot residual omega and vice versa.
-        These two plots further help in understanding any unwanted feature
-        in the measured eccentricity vs time plot. For example, non smoothness
-        in the residual omega22 would indicate that the data in omega22 is not
-        good which might be causing glitches in the measured eccentricity plot.
+          For example, if method is ResidualAmplitude then plot residual omega
+          and vice versa.  These two plots further help in understanding any
+          unwanted feature in the measured eccentricity vs time plot. For
+          example, non smoothness in the residual omega22 would indicate that
+          the data in omega22 is not good which might be causing glitches in
+          the measured eccentricity plot.
 
         Finally, plot
+
         - data that is being used for finding extrema.
 
-        Parameters:
-        -----------
-        add_help_text:
+        Parameters
+        ----------
+        add_help_text : bool, default: True
             If True, add text to describe features in the plot.
-            Default is True.
-        usetex:
+        usetex : bool, default: False
             If True, use TeX to render texts.
-            Default is True.
-        style:
+        style : str
             Set font size, figure size suitable for particular use case. For
             example, to generate plot for "APS" journals, use style="APS".  For
             showing plots in a jupyter notebook, use "Notebook" so that plots
@@ -1986,19 +2465,19 @@ class eccDefinition:
             plot_settings.py for more details.  If None, then uses "Notebook"
             when twocol is False and uses "APS" if twocol is True.
             Default is None.
-        use_fancy_settings:
+        use_fancy_settings : bool, default: True
             Use fancy settings for matplotlib to make the plot look prettier.
             See plot_settings.py for more details.
-            Default is True.
-        twocol:
-            Use a two column grid layout. Default is False.
-        **kwargs:
+        twocol : bool, default: False
+            Use a two column grid layout.
+        **kwargs
             kwargs to be passed to plt.subplots()
 
-        Returns:
-        fig:
+        Returns
+        -------
+        fig
             Figure object.
-        axarr:
+        axarr
             Axes object.
         """
         # Make a list of plots we want to add
@@ -2062,7 +2541,7 @@ class eccDefinition:
             fig=None,
             ax=None,
             add_help_text=True,
-            usetex=True,
+            usetex=False,
             style="Notebook",
             use_fancy_settings=True,
             add_vline_at_tref=True,
@@ -2082,7 +2561,7 @@ class eccDefinition:
             Default is True.
         usetex:
             If True, use TeX to render texts.
-            Default is True.
+            Default is False.
         style:
             Set font size, figure size suitable for particular use case. For
             example, to generate plot for "APS" journals, use style="APS".  For
@@ -2134,7 +2613,7 @@ class eccDefinition:
             fig=None,
             ax=None,
             add_help_text=True,
-            usetex=True,
+            usetex=False,
             style="Notebook",
             use_fancy_settings=True,
             **kwargs):
@@ -2155,7 +2634,7 @@ class eccDefinition:
             Default is True.
         usetex:
             If True, use TeX to render texts.
-            Default is True.
+            Default is False.
         style:
             Set font size, figure size suitable for particular use case. For
             example, to generate plot for "APS" journals, use style="APS".  For
@@ -2207,7 +2686,7 @@ class eccDefinition:
             fig=None,
             ax=None,
             add_help_text=True,
-            usetex=True,
+            usetex=False,
             style="Notebook",
             use_fancy_settings=True,
             add_vline_at_tref=True,
@@ -2227,7 +2706,7 @@ class eccDefinition:
             Default is True.
         usetex:
             If True, use TeX to render texts.
-            Default is True.
+            Default is False.
         style:
             Set font size, figure size suitable for particular use case. For
             example, to generate plot for "APS" journals, use style="APS".  For
@@ -2279,7 +2758,7 @@ class eccDefinition:
             fig=None,
             ax=None,
             add_help_text=True,
-            usetex=True,
+            usetex=False,
             style="Notebook",
             use_fancy_settings=True,
             **kwargs):
@@ -2302,7 +2781,7 @@ class eccDefinition:
             Default is True.
         usetex:
             If True, use TeX to render texts.
-            Default is True.
+            Default is False.
         style:
             Set font size, figure size suitable for particular use case. For
             example, to generate plot for "APS" journals, use style="APS".  For
@@ -2350,12 +2829,20 @@ class eccDefinition:
         ax.set_ylim(ymin - pad, ymax + pad)
         # add help text
         if add_help_text:
+            if usetex:
+                help_text = (
+                    r"\noindent To avoid extrapolation, first and last\\"
+                    r"extrema are excluded when\\"
+                    r"evaluating $\omega_{a}$/$\omega_{p}$ interpolants")
+            else:
+                help_text = (
+                    "To avoid extrapolation, first and last\n"
+                    "extrema are excluded when\n"
+                    r"evaluating $\omega_{a}$/$\omega_{p}$ interpolants")
             ax.text(
                 0.22,
                 0.98,
-                (r"\noindent To avoid extrapolation, first and last\\"
-                 r"extrema are excluded when\\"
-                 r"evaluating $\omega_{a}$/$\omega_{p}$ interpolants"),
+                help_text,
                 ha="left",
                 va="top",
                 transform=ax.transAxes)
@@ -2373,11 +2860,11 @@ class eccDefinition:
             fig=None,
             ax=None,
             add_help_text=True,
-            usetex=True,
+            usetex=False,
             style="Notebook",
             use_fancy_settings=True,
             plot_omega22=True,
-            plot_orbit_averaged_omega22_at_extrema=False,
+            plot_orbit_averaged_omega22_between_extrema=False,
             **kwargs):
         """Plot omega22_average.
 
@@ -2394,7 +2881,7 @@ class eccDefinition:
             Default is True.
         usetex:
             If True, use TeX to render texts.
-            Default is True.
+            Default is False.
         style:
             Set font size, figure size suitable for particular use case. For
             example, to generate plot for "APS" journals, use style="APS".  For
@@ -2408,9 +2895,9 @@ class eccDefinition:
             Default is True.
         plot_omega22: bool
             If True, plot omega22 also. Default is True.
-        plot_orbit_averaged_omega22_at_extrema: bool
+        plot_orbit_averaged_omega22_between_extrema: bool
             If True and method is orbit_averaged_omega22, plot the the orbit
-            averaged omega22 at the extrema as well. Default is False.
+            averaged omega22 between the extrema as well. Default is False.
 
         Returns:
         --------
@@ -2436,7 +2923,7 @@ class eccDefinition:
                     lw=0.5,
                     label=labelsDict["omega22"])
         if (self.extra_kwargs["omega22_averaging_method"] == "orbit_averaged_omega22" and
-            plot_orbit_averaged_omega22_at_extrema):
+            plot_orbit_averaged_omega22_between_extrema):
             ax.plot(self.t_average_apocenters,
                     self.orbit_averaged_omega22_apocenters,
                     c=colorsDict["apocenter"],
@@ -2459,7 +2946,7 @@ class eccDefinition:
             ax.text(
                 0.35,
                 0.98,
-                (r"\noindent omega22_average should be "
+                (r"omega22_average should be "
                  "monotonically increasing."),
                 ha="left",
                 va="top",
@@ -2476,7 +2963,7 @@ class eccDefinition:
             fig=None,
             ax=None,
             add_help_text=True,
-            usetex=True,
+            usetex=False,
             style="Notebook",
             use_fancy_settings=True,
             **kwargs):
@@ -2485,34 +2972,31 @@ class eccDefinition:
         This would show if the method is missing any pericenters/apocenters or
         selecting one which is not a pericenter/apocenter.
 
-        Parameters:
-        -----------
-        fig:
+        Parameters
+        ----------
+        fig :
             Figure object to add the plot to. If None, initiates a new figure
-            object.  Default is None.
-        ax:
+            object. Default is None.
+        ax :
             Axis object to add the plot to. If None, initiates a new axis
-            object.  Default is None.
-        add_help_text:
+            object. Default is None.
+        add_help_text : bool, default: True
             If True, add text to describe features in the plot.
-            Default is True.
-        usetex:
+        usetex : bool, default: False
             If True, use TeX to render texts.
-            Default is True.
-        style:
+        style : str, default: ``Notebook``
             Set font size, figure size suitable for particular use case. For
-            example, to generate plot for "APS" journals, use style="APS".  For
-            showing plots in a jupyter notebook, use "Notebook" so that plots
-            are bigger and fonts are appropriately larger and so on.  See
+            example, to generate plot for ``APS`` journals, use ``style='APS'``.
+            For showing plots in a jupyter notebook, use ``Notebook`` so that
+            plots are bigger and fonts are appropriately larger and so on.  See
             plot_settings.py for more details.
-            Default is Notebook.
-        use_fancy_settings:
+        use_fancy_settings : bool, default: True
             Use fancy settings for matplotlib to make the plot look prettier.
-            See plot_settings.py for more details.
-            Default is True.
+            See :py:func:`plot_settings.use_fancy_plotsettings` for more
+            details.
 
-        Returns:
-        --------
+        Returns
+        -------
         fig, ax
         """
         if fig is None or ax is None:
@@ -2546,7 +3030,7 @@ class eccDefinition:
             fig=None,
             ax=None,
             add_help_text=True,
-            usetex=True,
+            usetex=False,
             style="Notebook",
             use_fancy_settings=True,
             **kwargs):
@@ -2571,7 +3055,7 @@ class eccDefinition:
             Default is True.
         usetex:
             If True, use TeX to render texts.
-            Default is True.
+            Default is False.
         style:
             Set font size, figure size suitable for particular use case. For
             example, to generate plot for "APS" journals, use style="APS".  For
@@ -2637,7 +3121,7 @@ class eccDefinition:
             fig=None,
             ax=None,
             add_help_text=True,
-            usetex=True,
+            usetex=False,
             style="Notebook",
             use_fancy_settings=True,
             **kwargs):
@@ -2660,7 +3144,7 @@ class eccDefinition:
             Default is True.
         usetex:
             If True, use TeX to render texts.
-            Default is True.
+            Default is False.
         style:
             Set font size, figure size suitable for particular use case. For
             example, to generate plot for "APS" journals, use style="APS".  For
@@ -2710,7 +3194,7 @@ class eccDefinition:
             fig=None,
             ax=None,
             add_help_text=True,
-            usetex=True,
+            usetex=False,
             style="Notebook",
             use_fancy_settings=True,
             **kwargs):
@@ -2729,7 +3213,7 @@ class eccDefinition:
             Default is True.
         usetex:
             If True, use TeX to render texts.
-            Default is True.
+            Default is False.
         style:
             Set font size, figure size suitable for particular use case. For
             example, to generate plot for "APS" journals, use style="APS".  For
@@ -2781,7 +3265,7 @@ class eccDefinition:
             fig=None,
             ax=None,
             add_help_text=True,
-            usetex=True,
+            usetex=False,
             style="Notebook",
             use_fancy_settings=True,
             add_vline_at_tref=True,
@@ -2789,8 +3273,9 @@ class eccDefinition:
         """Plot the data that is being used.
 
         Also the locations of the apocenters and pericenters.
-        Parameters:
-        -----------
+
+        Parameters
+        ----------
         fig:
             Figure object to add the plot to. If None, initiates a new figure
             object.  Default is None.
@@ -2802,7 +3287,7 @@ class eccDefinition:
             Default is True.
         usetex:
             If True, use TeX to render texts.
-            Default is True.
+            Default is False.
         style:
             Set font size, figure size suitable for particular use case. For
             example, to generate plot for "APS" journals, use style="APS".  For
@@ -2919,9 +3404,9 @@ class eccDefinition:
         such systems the amp22/omega22 data between the pericenters is almost
         flat and hard to find the local minima.
 
-        returns:
-        ------
-        locations of apocenters
+        Returns
+        -------
+        locations of apocenters : array-like
         """
         # NOTE: Assuming uniform time steps.
         # TODO: Make it work for non
@@ -2952,12 +3437,12 @@ class eccDefinition:
         step is 1M. If using time in seconds, this would depend on the total
         mass.
 
-        Parameters:
+        Parameters
         ----------
-        width_for_unit_timestep:
+        width_for_unit_timestep : int
             Width to use when the time step in the wavefrom data is 1.
 
-        Returns:
+        Returns
         -------
         width:
             Minimal width to separate consecutive peaks.
